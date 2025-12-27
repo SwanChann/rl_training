@@ -20,12 +20,21 @@ class DeeproboticsLite3BipedEnvCfg(LocomotionVelocityRoughEnvCfg):
     rear_foot_link_name = "H[LR]_FOOT"  # HL_FOOT 和 HR_FOOT
     front_foot_link_name = "F[LR]_FOOT"  # FL_FOOT 和 FR_FOOT（用于惩罚接触）
     
-    # 关节名称
+    # 关节名称（所有12个关节）
     joint_names = [
         "FL_HipX_joint", "FL_HipY_joint", "FL_Knee_joint",
         "FR_HipX_joint", "FR_HipY_joint", "FR_Knee_joint",
         "HL_HipX_joint", "HL_HipY_joint", "HL_Knee_joint",
         "HR_HipX_joint", "HR_HipY_joint", "HR_Knee_joint",
+    ]
+    
+    # 所有连杆名称（用于 Events 随机化配置）
+    link_names = [
+        'TORSO', 
+        'FL_HIP', 'FR_HIP', 'HL_HIP', 'HR_HIP', 
+        'FL_THIGH', 'FR_THIGH', 'HL_THIGH', 'HR_THIGH', 
+        'FL_SHANK', 'FR_SHANK', 'HL_SHANK', 'HR_SHANK', 
+        'FL_FOOT', 'FR_FOOT', 'HL_FOOT', 'HR_FOOT',
     ]
     
     # 前腿关节（需要锁定）
@@ -55,7 +64,9 @@ class DeeproboticsLite3BipedEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # ------------------------------Scene------------------------------
         self.scene.robot = DEEPROBOTICS_LITE3_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        # 重要：height_scanner 的 prim_path 必须指向正确的基座链接
         self.scene.height_scanner.prim_path = "{ENV_REGEX_NS}/Robot/" + self.base_link_name
+        self.scene.height_scanner_base.prim_path = "{ENV_REGEX_NS}/Robot/" + self.base_link_name
 
         # ------------------------------Observations------------------------------
         # 保持与四足相同的观测量，确保 sim2real 兼容性
@@ -70,6 +81,15 @@ class DeeproboticsLite3BipedEnvCfg(LocomotionVelocityRoughEnvCfg):
         # ------------------------------Actions------------------------------
         self.actions.joint_pos.scale = {".*_HipX_joint": 0.125, "^(?!.*_HipX_joint).*": 0.25}
         self.actions.joint_pos.joint_names = self.joint_names
+
+        # ------------------------------Events------------------------------
+        # 重要：必须设置 body_names，否则会导致正则表达式匹配错误
+        self.events.randomize_rigid_body_mass.params["asset_cfg"].body_names = self.link_names
+        self.events.randomize_rigid_body_mass_base = None
+        self.events.randomize_com_positions.params["asset_cfg"].body_names = self.base_link_name
+        self.events.randomize_apply_external_force_torque = None
+        self.events.randomize_push_robot = None  # 双足平衡更难，禁用外力推动
+        self.events.randomize_actuator_gains.params["asset_cfg"].joint_names = self.joint_names
 
         # ------------------------------Rewards------------------------------
         self._setup_biped_rewards()
@@ -195,4 +215,3 @@ class DeeproboticsLite3BipedEnvCfg(LocomotionVelocityRoughEnvCfg):
         # 非期望接触（排除后腿足端）
         self.rewards.undesired_contacts.weight = -1.0
         self.rewards.undesired_contacts.params["sensor_cfg"].body_names = [f"^(?!.*{self.rear_foot_link_name}).*"]
-
