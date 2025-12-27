@@ -100,6 +100,12 @@ class DeeproboticsLite3BipedEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.commands.base_velocity.ranges.lin_vel_y = (-0.4, 0.4)
         self.commands.base_velocity.ranges.ang_vel_z = (-0.8, 0.8)
 
+        # ------------------------------Terminations------------------------------
+        self.terminations.illegal_contact = None
+
+        # ------------------------------Curriculums------------------------------
+        self.curriculum.command_levels = None
+
         # 禁用零权重奖励
         if self.__class__.__name__ == "DeeproboticsLite3BipedEnvCfg":
             self.disable_zero_weight_rewards()
