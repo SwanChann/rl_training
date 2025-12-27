@@ -745,3 +745,177 @@ def flat_orientation_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = Scen
     reward = torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
     # reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
     return reward
+
+# ==================== 双腿站立行走专用奖励函数 ====================
+
+def front_legs_fixed_pose(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    target_positions: dict[str, float],
+) -> torch.Tensor:
+    """惩罚前腿偏离目标固定姿态
+    
+    Args:
+        env: 环境实例
+        asset_cfg: 机器人资产配置，需指定前腿关节名称
+        target_positions: 目标关节角度字典，如 {"FL_HipY_joint": -1.0, "FL_Knee_joint": 2.0, ...}
+    
+    Returns:
+        惩罚值（越大表示偏离越多）
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    
+    reward = torch.zeros(env.num_envs, device=env.device)
+    for joint_name, target_pos in target_positions.items():
+        # 查找关节索引
+        joint_ids = asset.find_joints(joint_name)[0]
+        if len(joint_ids) > 0:
+            # 计算与目标位置的偏差
+            current_pos = asset.data.joint_pos[:, joint_ids]
+            reward += torch.sum(torch.square(current_pos - target_pos), dim=-1)
+    
+    return reward
+
+
+def biped_feet_air_time(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    threshold: float,
+    sensor_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """双足步态腾空时间奖励（仅针对后腿）
+    
+    奖励后腿交替抬起，保持单腿支撑的步态。
+    
+    Args:
+        env: 环境实例
+        command_name: 速度命令名称
+        threshold: 腾空时间阈值（秒）
+        sensor_cfg: 接触传感器配置，body_ids 应只包含后腿足端
+    
+    Returns:
+        奖励值
+    """
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    
+    # 获取后腿的腾空时间和接触时间
+    air_time = contact_sensor.data.current_air_time[:, sensor_cfg.body_ids]
+    contact_time = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids]
+    
+    # 检测是否在接触中
+    in_contact = contact_time > 0.0
+    in_mode_time = torch.where(in_contact, contact_time, air_time)
+    
+    # 单腿支撑（只有一只后腿接触地面）
+    single_stance = torch.sum(in_contact.int(), dim=1) == 1
+    
+    # 奖励单腿支撑时的时间
+    reward = torch.min(torch.where(single_stance.unsqueeze(-1), in_mode_time, 0.0), dim=1)[0]
+    reward = torch.clamp(reward, max=threshold)
+    
+    # 只在有速度命令时生效
+    reward *= torch.norm(env.command_manager.get_command(command_name)[:, :2], dim=1) > 0.1
+    
+    return reward
+
+
+def biped_balance(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """双足平衡奖励：惩罚重心在支撑多边形外的情况
+    
+    对于双足站立，支撑多边形是两只后脚之间的区域。
+    
+    Args:
+        env: 环境实例
+        asset_cfg: 机器人资产配置，body_ids 应为后腿足端
+    
+    Returns:
+        惩罚值（重心偏离支撑区域越多，惩罚越大）
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+    
+    # 获取后腿足端位置（机身坐标系）
+    foot_pos_w = asset.data.body_pos_w[:, asset_cfg.body_ids, :]
+    root_pos_w = asset.data.root_pos_w.unsqueeze(1)
+    
+    # 转换到机身坐标系
+    foot_pos_rel = foot_pos_w - root_pos_w
+    foot_pos_body = torch.zeros_like(foot_pos_rel)
+    for i in range(len(asset_cfg.body_ids)):
+        foot_pos_body[:, i, :] = math_utils.quat_apply_inverse(
+            asset.data.root_quat_w, foot_pos_rel[:, i, :]
+        )
+    
+    # 计算两只后脚的中点（Y方向）
+    feet_center_y = torch.mean(foot_pos_body[:, :, 1], dim=1)
+    
+    # 惩罚重心（机身中心）偏离两脚中点
+    # 在机身坐标系中，root 本身就是原点，所以检查足端中点是否在原点附近
+    reward = torch.square(feet_center_y)
+    
+    return reward
+
+
+def front_legs_no_contact(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    threshold: float = 1.0,
+) -> torch.Tensor:
+    """惩罚前腿接触地面
+    
+    Args:
+        env: 环境实例
+        sensor_cfg: 接触传感器配置，body_ids 应为前腿足端
+        threshold: 接触力阈值
+    
+    Returns:
+        惩罚值（前腿接触地面时为1，否则为0）
+    """
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    
+    # 检查前腿是否有接触
+    net_contact_forces = contact_sensor.data.net_forces_w_history
+    is_contact = torch.max(
+        torch.norm(net_contact_forces[:, :, sensor_cfg.body_ids], dim=-1), 
+        dim=1
+    )[0] > threshold
+    
+    # 任何前腿接触都惩罚
+    reward = torch.any(is_contact, dim=1).float()
+    
+    return reward
+
+
+def biped_upright_posture(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    target_pitch: float = 0.0,
+) -> torch.Tensor:
+    """双足站立姿态奖励：鼓励机身保持特定俯仰角
+    
+    对于双足站立，可能需要机身略微后仰以保持平衡。
+    
+    Args:
+        env: 环境实例
+        asset_cfg: 机器人资产配置
+        target_pitch: 目标俯仰角（弧度），正值表示后仰
+    
+    Returns:
+        惩罚值
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+    
+    # 从投影重力获取俯仰角信息
+    # projected_gravity_b 的 x 分量与 pitch 相关
+    projected_gx = asset.data.projected_gravity_b[:, 0]
+    
+    # 期望的投影重力 x 分量（根据目标 pitch 计算）
+    # 当 pitch = 0 时，gx = 0
+    # 当 pitch > 0（后仰）时，gx > 0
+    target_gx = torch.sin(torch.tensor(target_pitch, device=env.device))
+    
+    reward = torch.square(projected_gx - target_gx)
+    
+    return reward
