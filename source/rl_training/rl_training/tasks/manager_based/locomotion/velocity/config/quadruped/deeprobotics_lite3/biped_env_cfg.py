@@ -156,13 +156,14 @@ class DeeproboticsLite3BipedEnvCfg(LocomotionVelocityRoughEnvCfg):
         )
         
         # 前腿抬高奖励（类似 gym 中的 handstand 奖励）
-        self.rewards.front_legs_height = RewTerm(
-            func=mdp.front_legs_height,
+        self.rewards.front_legs_height_exp = RewTerm(
+            func=mdp.front_legs_height_exp,
             weight=15.0,  # 正向大奖励
             params={
                 "asset_cfg": SceneEntityCfg("robot", body_names=[self.front_foot_link_name]),
                 "target_height": 0.4,  # 目标高度
                 "std": 0.2,
+                "lift_threshold": 0.025,
             },
         )
 
@@ -186,6 +187,10 @@ class DeeproboticsLite3BipedEnvCfg(LocomotionVelocityRoughEnvCfg):
         # 后腿 HipX 关节偏离惩罚 - 保持双腿笔直
         self.rewards.joint_deviation_l1.weight = -2.0  # 提升权重
         self.rewards.joint_deviation_l1.params["asset_cfg"].joint_names = ["H[LR]_HipX.*"]
+        
+        # 非期望接触惩罚（膝盖等）
+        self.rewards.undesired_contacts.weight = -2.0
+        self.rewards.undesired_contacts.params["sensor_cfg"].body_names = ["^(?!.*_FOOT).*"]
         
         # 站立时保持姿态稳定
         self.rewards.stand_still.weight = -1.0  # 提升权重
