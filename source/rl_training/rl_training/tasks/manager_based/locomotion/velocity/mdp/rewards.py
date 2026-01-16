@@ -746,6 +746,39 @@ def flat_orientation_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = Scen
     # reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
     return reward
 
+
+def handstand_orientation_l2(
+    env: ManagerBasedRLEnv,
+    target_gravity: list[float],
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """姿态奖励：惩罚与目标姿态的偏差
+    
+    参考 gym_legged_robot.py 中的 _reward_handstand_orientation_l2 实现。
+    使用投影重力方向来评估姿态，对比当前和目标重力方向的 L2 距离。
+    
+    Args:
+        env: 环境实例
+        target_gravity: 目标重力方向，例如 [1, 0, 0] 表示双足站立
+        asset_cfg: 机器人资产配置
+    
+    Returns:
+        惩罚值（偏差越大，值越大）
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+    
+    # 获取当前投影重力
+    projected_gravity = asset.data.projected_gravity_b
+    
+    # 目标重力方向
+    target_gravity_tensor = torch.tensor(target_gravity, device=env.device)
+    
+    # 计算 L2 距离
+    reward = torch.sum(torch.square(projected_gravity - target_gravity_tensor), dim=1)
+    
+    return reward
+
+
 # ==================== 双腿站立行走专用奖励函数 ====================
 
 def front_legs_fixed_pose(

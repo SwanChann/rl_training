@@ -115,130 +115,139 @@ class DeeproboticsLite3BipedEnvCfg(LocomotionVelocityRoughEnvCfg):
     def _setup_biped_rewards(self):
         """配置双足站立行走的奖励函数
         
-        设计思路：
-        1. 首先确保能够站立起来（高度、姿态、前腿抬起）- 最高优先级
-        2. 然后学习保持平衡（重心、后腿稳定）
-        3. 最后学习行走（速度跟踪、步态）
+        参考 gym_legged_robot.py 和 gym_legged_robot_config.py 的奖励权重配置。
+        
+        设计思路（按权重大小分层）：
+        第一层（核心）：handstand_feet_height_exp=17.5, tracking_lin_vel=10, tracking_ang_vel=5
+        第二层（重要）：handstand_feet_on_air=1.5, handstand_feet_air_time=1.5, collision=-1.0
+        第三层（辅助）：handstand_orientation_l2=0.8, stand_still=-0.8, ang_vel_xy=-0.3
+        第四层（精细）：action_rate=-0.03, torques=-1e-5, dof_acc=-2.5e-7
         """
         
         # ==================== 禁用四足专用奖励 ====================
         self.rewards.feet_air_time.weight = 0.0
         self.rewards.feet_air_time_variance.weight = 0.0
         
-        # ==================== 第一阶段：站立能力（最高优先级）====================
+        # ==================== 第一层：核心奖励（|scale| > 10）====================
         
-        # 机身高度 - 核心中的核心
-        self.rewards.base_height_l2.weight = -50.0  # 大幅提升！站立是第一要务
-        self.rewards.base_height_l2.params["target_height"] = 0.50  # 降低目标高度，更容易达成
-        self.rewards.base_height_l2.params["asset_cfg"].body_names = [self.base_link_name]
-
-        # 保持姿态水平 - 防止摔倒
-        self.rewards.flat_orientation_l2.weight = -30.0  # 大幅提升
-        
-        # 前腿抬起并固定 - 站立的关键
-        self.rewards.front_legs_fixed_pose = RewTerm(
-            func=mdp.front_legs_fixed_pose,
-            weight=-25.0,  # 提升权重
+        # 前腿抬高奖励 - 对应 gym 的 handstand_feet_height_exp (17.5)
+        self.rewards.front_legs_height_exp = RewTerm(
+            func=mdp.front_legs_height_exp,
+            weight=17.5,  # gym 配置: 17.5
             params={
-                "asset_cfg": SceneEntityCfg("robot", joint_names=self.front_leg_joints),
-                "target_positions": self.front_leg_target_positions,
+                "asset_cfg": SceneEntityCfg("robot", body_names=[self.front_foot_link_name]),
+                "target_height": 0.6,  # gym 配置: 0.6
+                "std": 0.4,  # gym 配置: 0.4
+                "lift_threshold": 0.025,  # gym 配置: 0.025
             },
         )
         
-        # 前腿不能接触地面 - 强制抬起
+        # 速度跟踪 - 对应 gym 的 tracking_lin_vel (10.0) 和 tracking_ang_vel (5.0)
+        self.rewards.track_lin_vel_xy_exp.weight = 10.0
+        self.rewards.track_ang_vel_z_exp.weight = 5.0
+
+        # ==================== 第二层：重要奖励（1 < |scale| ≤ 10）====================
+        
+        # 前腿离地奖励 - 对应 gym 的 handstand_feet_on_air (1.5)
         self.rewards.front_legs_no_contact = RewTerm(
             func=mdp.front_legs_no_contact,
-            weight=-20.0,  # 提升权重
+            weight=-1.5,  # 惩罚前腿接触地面
             params={
                 "sensor_cfg": SceneEntityCfg("contact_forces", body_names=[self.front_foot_link_name]),
                 "threshold": 1.0,
             },
         )
         
-        # 前腿抬高奖励（类似 gym 中的 handstand 奖励）
-        self.rewards.front_legs_height_exp = RewTerm(
-            func=mdp.front_legs_height_exp,
-            weight=15.0,  # 正向大奖励
+        # 前腿悬空时间 - 对应 gym 的 handstand_feet_air_time (1.5)
+        self.rewards.biped_feet_air_time = RewTerm(
+            func=mdp.biped_feet_air_time,
+            weight=1.5,
             params={
-                "asset_cfg": SceneEntityCfg("robot", body_names=[self.front_foot_link_name]),
-                "target_height": 0.4,  # 目标高度
-                "std": 0.2,
-                "lift_threshold": 0.025,
+                "command_name": "base_velocity",
+                "threshold": 5.0,  # gym 配置: 5.0
+                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=[self.rear_foot_link_name]),
             },
         )
-
-        # ==================== 第二阶段：平衡与稳定 ====================
         
-        # Z轴速度惩罚 - 防止跳跃
-        self.rewards.lin_vel_z_l2.weight = -4.0
+        # 碰撞惩罚 - 对应 gym 的 collision (-1.0)
+        self.rewards.undesired_contacts.weight = -1.0
+        self.rewards.undesired_contacts.params["sensor_cfg"].body_names = [".*THIGH.*", ".*SHANK.*"]
         
-        # XY角速度惩罚 - 防止翻滚
-        self.rewards.ang_vel_xy_l2.weight = -0.5
+        # ==================== 第三层：辅助奖励（|scale| ≤ 1）====================
         
-        # 双足平衡奖励 - 重心控制
+        # 姿态控制 - 对应 gym 的 handstand_orientation_l2 (0.8)
+        self.rewards.handstand_orientation = RewTerm(
+            func=mdp.handstand_orientation_l2,
+            weight=-0.8,  # 惩罚偏离目标姿态
+            params={
+                "target_gravity": [1.0, 0.0, 0.0],  # gym 配置: [1, 0, 0]
+            },
+        )
+        
+        # 静止保持 - 对应 gym 的 stand_still (-0.8)
+        self.rewards.stand_still.weight = -0.8
+        self.rewards.stand_still.params["command_threshold"] = 0.1
+        self.rewards.stand_still.params["asset_cfg"].joint_names = self.joint_names
+        
+        # XY角速度惩罚 - 对应 gym 的 ang_vel_xy (-0.3)
+        self.rewards.ang_vel_xy_l2.weight = -0.3
+        
+        # Z轴速度惩罚（保持稳定）
+        self.rewards.lin_vel_z_l2.weight = 0.0  # gym 配置: 0.0
+        
+        # ==================== 第四层：精细调节（|scale| < 0.01）====================
+        
+        # 动作平滑性 - 对应 gym 的 action_rate (-0.03)
+        self.rewards.action_rate_l2.weight = -0.03
+        
+        # 关节力矩 - 对应 gym 的 torques (-1e-5)
+        self.rewards.joint_torques_l2.weight = -1e-5
+        
+        # 关节加速度 - 对应 gym 的 dof_acc (-2.5e-7)
+        self.rewards.joint_acc_l2.weight = -2.5e-7
+        
+        # 关节功率（能耗）
+        self.rewards.joint_power.weight = 0.0  # gym 配置: 0.0
+        
+        # ==================== 前腿固定姿态（额外惩罚）====================
+        
+        # 前腿姿态锁定
+        self.rewards.front_legs_fixed_pose = RewTerm(
+            func=mdp.front_legs_fixed_pose,
+            weight=-5.0,  # 中等惩罚
+            params={
+                "asset_cfg": SceneEntityCfg("robot", joint_names=self.front_leg_joints),
+                "target_positions": self.front_leg_target_positions,
+            },
+        )
+        
+        # 机身高度（辅助）
+        self.rewards.base_height_l2.weight = 0.0  # gym 配置: 0.0
+        self.rewards.base_height_l2.params["target_height"] = 0.95  # gym 配置: 0.95
+        
+        # 姿态水平（辅助，与 handstand_orientation 配合）
+        self.rewards.flat_orientation_l2.weight = 0.0  # 使用 handstand_orientation 代替
+        
+        # 双足平衡（额外）
         self.rewards.biped_balance = RewTerm(
             func=mdp.biped_balance,
-            weight=-8.0,
+            weight=-2.0,
             params={
                 "asset_cfg": SceneEntityCfg("robot", body_names=[self.rear_foot_link_name]),
             },
         )
         
-        # 后腿 HipX 关节偏离惩罚 - 保持双腿笔直
-        self.rewards.joint_deviation_l1.weight = -2.0  # 提升权重
-        self.rewards.joint_deviation_l1.params["asset_cfg"].joint_names = ["H[LR]_HipX.*"]
-        
-        # 非期望接触惩罚（膝盖等）
-        self.rewards.undesired_contacts.weight = -2.0
-        self.rewards.undesired_contacts.params["sensor_cfg"].body_names = ["^(?!.*_FOOT).*"]
-        
-        # 站立时保持姿态稳定
-        self.rewards.stand_still.weight = -1.0  # 提升权重
-        self.rewards.stand_still.params["command_threshold"] = 0.05  # 降低阈值
-        self.rewards.stand_still.params["asset_cfg"].joint_names = self.joint_names
-
-        # ==================== 第三阶段：速度跟踪与步态（低优先级）====================
-        
-        # 速度跟踪 - 降低权重，先学会站立再学行走
-        self.rewards.track_lin_vel_xy_exp.weight = 0.5  # 大幅降低
-        self.rewards.track_ang_vel_z_exp.weight = 0.3  # 大幅降低
-        
-        # 双足腾空时间奖励（只针对后腿）
-        self.rewards.biped_feet_air_time = RewTerm(
-            func=mdp.biped_feet_air_time,
-            weight=0.8,  # 降低权重
-            params={
-                "command_name": "base_velocity",
-                "threshold": 0.3,  # 降低阈值
-                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=[self.rear_foot_link_name]),
-            },
-        )
+        # 后腿 HipX 关节偏离惩罚
+        self.rewards.joint_deviation_l1.weight = 0.0  # 暂时禁用
         
         # 后腿足端滑动惩罚
-        self.rewards.feet_slide.weight = -0.15
-        self.rewards.feet_slide.params["sensor_cfg"].body_names = [self.rear_foot_link_name]
-        self.rewards.feet_slide.params["asset_cfg"].body_names = [self.rear_foot_link_name]
+        self.rewards.feet_slide.weight = 0.0  # 暂时禁用
         
         # 后腿足端高度
-        self.rewards.feet_height.weight = -0.4
-        self.rewards.feet_height.params["asset_cfg"].body_names = [self.rear_foot_link_name]
-        self.rewards.feet_height.params["target_height"] = 0.06
+        self.rewards.feet_height.weight = 0.0  # 暂时禁用
         
         # 后腿足端高度（机身坐标系）
-        self.rewards.feet_height_body.weight = -2.0  # 降低权重
-        self.rewards.feet_height_body.params["target_height"] = -0.50
-        self.rewards.feet_height_body.params["asset_cfg"].body_names = [self.rear_foot_link_name]
-
-        # ==================== 能耗与平滑性（低优先级）====================
-        self.rewards.action_rate_l2.weight = -0.01  # 降低，先学会站立
-        self.rewards.joint_torques_l2.weight = -1e-5  # 降低
-        self.rewards.joint_acc_l2.weight = -1e-9  # 降低
-        self.rewards.joint_power.weight = -1e-5  # 降低
-
-        # ==================== 接触力控制 ====================
-        self.rewards.contact_forces.weight = -2e-2
-        self.rewards.contact_forces.params["sensor_cfg"].body_names = [self.rear_foot_link_name]
+        self.rewards.feet_height_body.weight = 0.0  # 暂时禁用
         
-        # 非期望接触（排除后腿足端）- 防止膝盖、大腿接触地面
-        self.rewards.undesired_contacts.weight = -2.0  # 提升权重
-        self.rewards.undesired_contacts.params["sensor_cfg"].body_names = [f"^(?!.*{self.rear_foot_link_name}).*"]
+        # 接触力控制
+        self.rewards.contact_forces.weight = 0.0  # 暂时禁用
