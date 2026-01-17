@@ -90,7 +90,7 @@ class DeeproboticsLite3RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.events.randomize_actuator_gains.params["asset_cfg"].joint_names = self.joint_names
 
         # scale down the terrains because the robot is small
-        self.scene.terrain.terrain_generator.sub_terrains["boxes"].grid_height_range = (0.025, 0.1)
+        self.scene.terrain.terrain_generator.sub_terrains["boxes"].grid_height_range = (0.025, 0.25)# (0.025, 0.1)
         self.scene.terrain.terrain_generator.sub_terrains["random_rough"].noise_range = (0.01, 0.06)
         self.scene.terrain.terrain_generator.sub_terrains["random_rough"].noise_step = 0.01
 
@@ -99,11 +99,11 @@ class DeeproboticsLite3RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         # self.rewards.smoothness_2.weight = -0.0075
 
         self.rewards.base_height_l2.weight = -10.0
-        self.rewards.base_height_l2.params["target_height"] = 0.35
+        self.rewards.base_height_l2.params["target_height"] = 0.45 # 0.35
         self.rewards.base_height_l2.params["asset_cfg"].body_names = [self.base_link_name]
 
         self.rewards.feet_air_time.weight = 1.0
-        self.rewards.feet_air_time.params["threshold"] = 0.5
+        self.rewards.feet_air_time.params["threshold"] = 0.8 # 0.5
         self.rewards.feet_air_time.params["sensor_cfg"].body_names = [self.foot_link_name]
         self.rewards.feet_air_time_variance.weight = -8.0
         self.rewards.feet_air_time_variance.params["sensor_cfg"].body_names = [self.foot_link_name]
@@ -114,11 +114,11 @@ class DeeproboticsLite3RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.rewards.stand_still.params["asset_cfg"].joint_names = self.joint_names
         self.rewards.stand_still.params["command_threshold"] = 0.1
         self.rewards.feet_height_body.weight = -2.5
-        self.rewards.feet_height_body.params["target_height"] = -0.35
+        self.rewards.feet_height_body.params["target_height"] = -0.3  # -0.35
         self.rewards.feet_height_body.params["asset_cfg"].body_names = [self.foot_link_name]
         self.rewards.feet_height.weight = -0.2
         self.rewards.feet_height.params["asset_cfg"].body_names = [self.foot_link_name]
-        self.rewards.feet_height.params["target_height"] = 0.05
+        self.rewards.feet_height.params["target_height"] = 0.10 #0.05
         self.rewards.contact_forces.weight = -2e-2
         self.rewards.contact_forces.params["sensor_cfg"].body_names = [self.foot_link_name]
 
@@ -152,6 +152,6 @@ class DeeproboticsLite3RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.curriculum.command_levels = None
 
         # ------------------------------Commands------------------------------
-        self.commands.base_velocity.ranges.lin_vel_x = (-1.5, 1.5)
+        self.commands.base_velocity.ranges.lin_vel_x = (-1, 1) # (-1.5, 1.5)
         self.commands.base_velocity.ranges.lin_vel_y = (-0.8, 0.8)
         self.commands.base_velocity.ranges.ang_vel_z = (-1.5, 1.5)
