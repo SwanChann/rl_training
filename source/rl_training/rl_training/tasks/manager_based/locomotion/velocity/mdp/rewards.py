@@ -746,6 +746,39 @@ def flat_orientation_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = Scen
     # reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
     return reward
 
+
+def handstand_orientation_l2(
+    env: ManagerBasedRLEnv,
+    target_gravity: list[float],
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """姿态奖励：惩罚与目标姿态的偏差
+    
+    参考 gym_legged_robot.py 中的 _reward_handstand_orientation_l2 实现。
+    使用投影重力方向来评估姿态，对比当前和目标重力方向的 L2 距离。
+    
+    Args:
+        env: 环境实例
+        target_gravity: 目标重力方向，例如 [1, 0, 0] 表示双足站立
+        asset_cfg: 机器人资产配置
+    
+    Returns:
+        惩罚值（偏差越大，值越大）
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+    
+    # 获取当前投影重力
+    projected_gravity = asset.data.projected_gravity_b
+    
+    # 目标重力方向
+    target_gravity_tensor = torch.tensor(target_gravity, device=env.device)
+    
+    # 计算 L2 距离
+    reward = torch.sum(torch.square(projected_gravity - target_gravity_tensor), dim=1)
+    
+    return reward
+
+
 # ==================== 双腿站立行走专用奖励函数 ====================
 
 def front_legs_fixed_pose(
@@ -919,3 +952,72 @@ def biped_upright_posture(
     reward = torch.square(projected_gx - target_gx)
     
     return reward
+
+
+def front_legs_height_exp(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    target_height: float,
+    std: float = 0.2,
+    lift_threshold: float = 0.025,
+) -> torch.Tensor:
+    """前腿抬高奖励 (高级版)：鼓励前腿足端达到目标高度
+    
+    参考 gym_legged_robot.py 中的 _reward_handstand_feet_height_exp 实现。
+    结合了分阶段奖励和指数目标奖励。
+    
+    Args:
+        env: 环境实例
+        asset_cfg: 机器人资产配置，body_ids 应为前腿足端
+        target_height: 目标高度（米）
+        std: 指数核函数的标准差
+        lift_threshold: 抬离地面的高度阈值（米）
+    
+    Returns:
+        奖励值
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+    
+    # 获取前腿足端高度
+    foot_heights = asset.data.body_pos_w[:, asset_cfg.body_ids, 2]
+    
+    # 1. 抬腿状态判断
+    legs_lifted = foot_heights > lift_threshold
+    any_leg_lifted = torch.any(legs_lifted, dim=1).float()
+    both_legs_lifted = torch.all(legs_lifted, dim=1).float()
+    
+    # 2. 计算有效抬升量
+    lift_amounts = torch.clamp(foot_heights - lift_threshold, min=0.0)
+    
+    # 3. 分阶段奖励组件
+    # (a) 基础抬腿奖励：只要有腿离地就给分
+    base_reward = any_leg_lifted * 0.3
+    
+    # (b) 单腿抬高奖励：鼓励抬得更高
+    max_lift = torch.max(lift_amounts, dim=1)[0]
+    single_leg_reward = (max_lift / (target_height - lift_threshold)) * 0.4
+    
+    # (c) 双腿协调奖励：鼓励双腿同时离地
+    both_legs_reward = both_legs_lifted * 0.5
+    
+    # (d) 最小抬升奖励：鼓励双腿平衡抬起
+    min_lift = torch.min(lift_amounts, dim=1)[0]
+    min_lift_reward = (min_lift / (target_height - lift_threshold)) * 0.3
+    
+    # (e) 目标高度精确奖励 (指数核)
+    # 只对已经抬起的腿计算精确高度奖励，未抬起的腿使用阈值代替计算
+    # 这样可以避免未抬起时产生过大的误差惩罚，而是引导其先抬起
+    effective_heights = torch.where(legs_lifted, foot_heights, torch.tensor(lift_threshold, device=env.device))
+    height_error = torch.sum(torch.square(effective_heights - target_height), dim=1)
+    target_reward = torch.exp(-height_error / (std ** 2)) * 0.6
+    
+    # 4. 组合总奖励
+    total_reward = (
+        base_reward + 
+        single_leg_reward + 
+        both_legs_reward + 
+        min_lift_reward + 
+        target_reward
+    )
+    
+    return total_reward
