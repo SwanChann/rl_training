@@ -80,8 +80,20 @@ class DeeproboticsLite3BipedEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.observations.policy.joint_vel.params["asset_cfg"].joint_names = self.joint_names
 
         # ------------------------------Actions------------------------------
+        # Policy 动作缩放：action * scale + default_offset = target_position
+        # 为了安全，限制 policy 能控制的范围小于关节硬限位
         self.actions.joint_pos.scale = {".*_HipX_joint": 0.125, "^(?!.*_HipX_joint).*": 0.25}
         self.actions.joint_pos.joint_names = self.joint_names
+        
+        # 关节位置 clip：限制 policy 输出到安全范围（小于 URDF 硬限位）
+        # 格式：{"关节名正则": (min, max)} 单位：rad
+        # URDF 限位：HipX=[-0.523,0.523], HipY=[-2.67,0.314], Knee=[0.524,2.792]
+        # Policy 范围设为硬限位的 85% 左右，留出安全裕度
+        self.actions.joint_pos.clip = {
+            ".*_HipX_joint": (-0.45, 0.45),     # 硬限位 ±0.523，缩小到 ±0.45
+            ".*_HipY_joint": (-2.3, 0.25),      # 硬限位 [-2.67,0.314]，缩小范围
+            ".*_Knee_joint": (0.6, 2.5),        # 硬限位 [0.524,2.792]，缩小范围
+        }
 
         # ------------------------------Events------------------------------
         # 重要：必须设置 body_names，否则会导致正则表达式匹配错误

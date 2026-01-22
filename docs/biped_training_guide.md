@@ -272,40 +272,83 @@ DEEPROBOTICS_LITE3_CFG = ArticulationCfg(
 
 Lite3 机器人的关节限位（来自 URDF 文件）：
 
-| 关节类型 | 关节 | 下限 (rad) | 上限 (rad) | 说明 |
-|---------|-----|-----------|-----------|------|
-| HipX | `.*_HipX_joint` | -0.7 | +0.7 | 侧摆关节 |
-| HipY | `.*_HipY_joint` | -3.14 | +1.57 | 髋关节（大范围） |
-| Knee | `.*_Knee_joint` | -0.1 | +2.70 | 膝关节 |
+| 关节类型 | 关节 | URDF 下限 (rad) | URDF 上限 (rad) | 力矩限制 (Nm) | 速度限制 (rad/s) |
+|---------|-----|----------------|----------------|--------------|----------------|
+| HipX | `.*_HipX_joint` | -0.523 | +0.523 | 24 | 26.2 |
+| HipY | `.*_HipY_joint` | -2.67 | +0.314 | 24 | 26.2 |
+| Knee | `.*_Knee_joint` | +0.524 | +2.792 | 36 | 17.3 |
 
-### 3.3 双足站立的关节限位建议
+### 3.3 Policy 控制范围配置
 
-对于双足站立训练，可以考虑以下限位调整策略：
+为保护机器人硬件，**Policy 能控制的关节位置范围应小于 URDF 硬限位**。
+
+在 `biped_env_cfg.py` 中通过 `clip` 参数配置：
+
+| 关节类型 | URDF 硬限位 | Policy 控制范围 | 缩减比例 | 说明 |
+|---------|-----------|----------------|---------|------|
+| HipX | [-0.523, +0.523] | **[-0.45, +0.45]** | ~86% | 侧摆留出安全裕度 |
+| HipY | [-2.67, +0.314] | **[-2.3, +0.25]** | ~85% | 髋关节限制范围 |
+| Knee | [+0.524, +2.792] | **[+0.6, +2.5]** | ~84% | 膝关节限制范围 |
+
+**配置代码**：
+
+```python
+# biped_env_cfg.py 中的 Actions 配置
+self.actions.joint_pos.clip = {
+    ".*_HipX_joint": (-0.45, 0.45),     # 硬限位 ±0.523，缩小到 ±0.45
+    ".*_HipY_joint": (-2.3, 0.25),      # 硬限位 [-2.67,0.314]，缩小范围
+    ".*_Knee_joint": (0.6, 2.5),        # 硬限位 [0.524,2.792]，缩小范围
+}
+```
+
+**动作映射公式**：
+
+```
+target_position = clip(action * scale + default_offset, min_limit, max_limit)
+```
+
+其中：
+- `action`: Policy 输出，范围 [-1, 1]
+- `scale`: 动作缩放因子（HipX=0.125，其他=0.25）
+- `default_offset`: 默认关节角度（HipX=0, HipY=-0.8, Knee=1.6）
+- `clip`: 将结果限制在 Policy 控制范围内
+
+### 3.4 双足站立的关节限位建议
+
+对于双足站立训练，通过 `clip` 配置限制 Policy 的输出范围，确保安全：
 
 #### 前腿（需要抬起并锁定）
 
 ```python
-# 前腿目标姿态
+# 前腿目标姿态（收起状态）
 front_leg_target_positions = {
     "FL_HipX_joint": 0.0,      # 侧摆：保持中立
-    "FL_HipY_joint": -1.5,     # 髋关节：向上抬起
-    "FL_Knee_joint": 2.6,      # 膝关节：弯曲收起
+    "FL_HipY_joint": -1.5,     # 髋关节：向上抬起（在 Policy 范围 [-2.3, 0.25] 内）
+    "FL_Knee_joint": 2.6,      # 膝关节：弯曲收起（接近 Policy 上限 2.5，会被 clip）
     "FR_HipX_joint": 0.0,
     "FR_HipY_joint": -1.5,
     "FR_Knee_joint": 2.6,
 }
 ```
 
+> 注意：前腿 Knee 目标值 2.6 超过 Policy clip 上限 2.5，会被自动限制为 2.5
+```
+
 #### 后腿（主要行走）
 
-后腿使用默认限位，但可以通过奖励函数限制 HipX 偏离：
+后腿使用 Policy clip 配置的限位范围，同时可以通过奖励函数限制 HipX 偏离：
 
 ```python
-# 惩罚后腿 HipX 偏离中立位置
+# 后腿关节 Policy 控制范围
+# HipX: [-0.45, +0.45] rad - 侧摆限制
+# HipY: [-2.3, +0.25] rad - 髋关节大范围运动
+# Knee: [+0.6, +2.5] rad - 膝关节弯曲范围
+
+# 惩罚后腿 HipX 偏离中立位置（可选）
 self.rewards.joint_deviation_l1.params["asset_cfg"].joint_names = ["H[LR]_HipX.*"]
 ```
 
-### 3.4 动作缩放配置
+### 3.5 动作缩放配置
 
 ```python
 # biped_env_cfg.py 中的动作缩放
