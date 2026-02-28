@@ -15,7 +15,13 @@ from rl_training.assets.deeprobotics import DEEPROBOTICS_LITE3_CFG  # isort: ski
 
 
 @configclass
-class DeeproboticsLite3RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
+class DeeproboticsLite3ClimbEnvCfg(LocomotionVelocityRoughEnvCfg):
+    """Configuration for Lite3 climbing/obstacle traversal environment.
+    
+    This environment is designed for obstacle climbing training. It is based on the rough terrain
+    environment but with higher foot lift height to step over obstacles. The robot uses blind 
+    locomotion (no height scan) with increased foot clearance for obstacle traversal.
+    """
     base_link_name = "TORSO"
     foot_link_name = ".*_FOOT"
     # fmt: off
@@ -46,6 +52,7 @@ class DeeproboticsLite3RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.scene.height_scanner.pattern_cfg.resolution = 0.07 #  = GridPatternCfg(resolution=0.07, size=[1.6, 1.0]),
 
         # ------------------------------Observations------------------------------
+        # Blind locomotion - no height scan or linear velocity feedback
         self.observations.policy.base_lin_vel = None # type: ignore
         self.observations.policy.height_scan = None # type: ignore
         self.observations.policy.base_ang_vel.scale = 0.25
@@ -80,32 +87,32 @@ class DeeproboticsLite3RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
             },
         }
 
-
-        self.events.randomize_rigid_body_mass.params["asset_cfg"].body_names = self.link_names # [self.base_link_name]
+        self.events.randomize_rigid_body_mass.params["asset_cfg"].body_names = self.link_names
         self.events.randomize_rigid_body_mass_base = None
-        self.events.randomize_com_positions.params["asset_cfg"].body_names = self.base_link_name # [self.base_link_name]
-        # self.events.randomize_com_positions = None
+        self.events.randomize_com_positions.params["asset_cfg"].body_names = self.base_link_name
         self.events.randomize_apply_external_force_torque = None
         self.events.randomize_push_robot = None
         self.events.randomize_actuator_gains.params["asset_cfg"].joint_names = self.joint_names
 
-        # scale down the terrains because the robot is small
-        self.scene.terrain.terrain_generator.sub_terrains["boxes"].grid_height_range = (0.025, 0.25)# (0.025, 0.1)
-        self.scene.terrain.terrain_generator.sub_terrains["random_rough"].noise_range = (0.01, 0.06)
-        self.scene.terrain.terrain_generator.sub_terrains["random_rough"].noise_step = 0.01
+        # Terrain configuration for climbing - higher obstacles
+        # Increased box heights for obstacle climbing training
+        self.scene.terrain.terrain_generator.sub_terrains["boxes"].grid_height_range = (0.05, 0.35)  # Higher obstacles (was 0.025, 0.25)
+        self.scene.terrain.terrain_generator.sub_terrains["random_rough"].noise_range = (0.02, 0.10)  # Rougher terrain (was 0.01, 0.06)
+        self.scene.terrain.terrain_generator.sub_terrains["random_rough"].noise_step = 0.02  # Larger steps (was 0.01)
 
         # ------------------------------Rewards------------------------------
         self.rewards.action_rate_l2.weight = -0.02
-        # self.rewards.smoothness_2.weight = -0.0075
 
+        # Slightly higher body height for better obstacle clearance
         self.rewards.base_height_l2.weight = -10.0
-        self.rewards.base_height_l2.params["target_height"] = 0.45 # 0.35
+        self.rewards.base_height_l2.params["target_height"] = 0.48  # Higher than rough (was 0.45)
         self.rewards.base_height_l2.params["asset_cfg"].body_names = [self.base_link_name]
 
-        self.rewards.feet_air_time.weight = 1.0
-        self.rewards.feet_air_time.params["threshold"] = 0.8 # 0.5
+        # Encourage longer air time for higher steps
+        self.rewards.feet_air_time.weight = 1.5  # Increased from 1.0
+        self.rewards.feet_air_time.params["threshold"] = 0.6  # Adjusted for climbing gait (was 0.8)
         self.rewards.feet_air_time.params["sensor_cfg"].body_names = [self.foot_link_name]
-        self.rewards.feet_air_time_variance.weight = -8.0
+        self.rewards.feet_air_time_variance.weight = -6.0  # Slightly relaxed (was -8.0)
         self.rewards.feet_air_time_variance.params["sensor_cfg"].body_names = [self.foot_link_name]
         self.rewards.feet_slide.weight = -0.05
         self.rewards.feet_slide.params["sensor_cfg"].body_names = [self.foot_link_name]
@@ -113,16 +120,21 @@ class DeeproboticsLite3RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.rewards.stand_still.weight = -0.3
         self.rewards.stand_still.params["asset_cfg"].joint_names = self.joint_names
         self.rewards.stand_still.params["command_threshold"] = 0.1
-        self.rewards.feet_height_body.weight = -2.5
-        self.rewards.feet_height_body.params["target_height"] = -0.3  # -0.35
+
+        # Key change: Higher foot lift for obstacle climbing
+        self.rewards.feet_height_body.weight = -2.0  # Slightly relaxed (was -2.5)
+        self.rewards.feet_height_body.params["target_height"] = -0.20  # Higher foot position (was -0.3)
         self.rewards.feet_height_body.params["asset_cfg"].body_names = [self.foot_link_name]
-        self.rewards.feet_height.weight = -0.2
+        
+        # Significantly increased target foot height during swing phase for obstacle clearance
+        self.rewards.feet_height.weight = -0.4  # Increased weight (was -0.2)
         self.rewards.feet_height.params["asset_cfg"].body_names = [self.foot_link_name]
-        self.rewards.feet_height.params["target_height"] = 0.10 #0.05
+        self.rewards.feet_height.params["target_height"] = 0.18  # Much higher (was 0.10)
+        
         self.rewards.contact_forces.weight = -2e-2
         self.rewards.contact_forces.params["sensor_cfg"].body_names = [self.foot_link_name]
 
-        self.rewards.lin_vel_z_l2.weight = -2.0
+        self.rewards.lin_vel_z_l2.weight = -1.5  # Slightly relaxed for climbing (was -2.0)
         self.rewards.ang_vel_xy_l2.weight = -0.05
 
         self.rewards.track_lin_vel_xy_exp.weight = 1.2
@@ -133,25 +145,23 @@ class DeeproboticsLite3RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         self.rewards.joint_torques_l2.weight = -2.5e-5
         self.rewards.joint_acc_l2.weight = -1e-8
-        self.rewards.joint_deviation_l1.weight = -0.5
+        self.rewards.joint_deviation_l1.weight = -0.4  # Slightly relaxed (was -0.5)
         self.rewards.joint_deviation_l1.params["asset_cfg"].joint_names = [".*HipX.*"]
         self.rewards.joint_power.weight = -2e-5
-        self.rewards.flat_orientation_l2.weight = -5.0
-
+        self.rewards.flat_orientation_l2.weight = -4.0  # Slightly relaxed for uneven terrain (was -5.0)
 
         # If the weight of rewards is 0, set rewards to None
-        if self.__class__.__name__ == "DeeproboticsLite3RoughEnvCfg":
+        if self.__class__.__name__ == "DeeproboticsLite3ClimbEnvCfg":
             self.disable_zero_weight_rewards()
 
         # ------------------------------Terminations------------------------------
         self.terminations.illegal_contact = None
-        # self.terminations.bad_orientation_2 = None
 
         # ------------------------------Curriculums------------------------------
-        # self.curriculum.command_levels.params["range_multiplier"] = (0.2, 1.0)
         self.curriculum.command_levels = None
 
         # ------------------------------Commands------------------------------
-        self.commands.base_velocity.ranges.lin_vel_x = (-1, 1) # (-1.5, 1.5)
-        self.commands.base_velocity.ranges.lin_vel_y = (-0.8, 0.8)
-        self.commands.base_velocity.ranges.ang_vel_z = (-1.5, 1.5)
+        # Slightly slower commands for careful climbing
+        self.commands.base_velocity.ranges.lin_vel_x = (-0.8, 0.8)  # Slower than rough (was -1, 1)
+        self.commands.base_velocity.ranges.lin_vel_y = (-0.5, 0.5)  # Slower lateral (was -0.8, 0.8)
+        self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)  # Slower turning (was -1.5, 1.5)
